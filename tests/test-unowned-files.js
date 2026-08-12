@@ -1,7 +1,10 @@
 #!/usr/bin/env node
 
 const assert = require("assert");
-const { containsUnownedChangedFile } = require("../auto-unapprove.js");
+const {
+  containsUnownedChangedFile,
+  isUserCodeowner,
+} = require("../auto-unapprove.js");
 
 assert.strictEqual(
   containsUnownedChangedFile(
@@ -16,6 +19,24 @@ assert.strictEqual(
 assert.strictEqual(
   containsUnownedChangedFile(
     new Map([["src/owned.js", ["@alice", "@bob"]]]),
+  ),
+  false,
+);
+
+assert.strictEqual(
+  isUserCodeowner(
+    "alice",
+    [{ path: "/src/other.js", owners: ["@alice"] }],
+    new Map(),
+  ),
+  true,
+);
+
+assert.strictEqual(
+  isUserCodeowner(
+    "bob",
+    [{ path: "/src/other.js", owners: ["@alice"] }],
+    new Map(),
   ),
   false,
 );

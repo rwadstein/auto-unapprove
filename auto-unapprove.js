@@ -165,8 +165,9 @@ async function smartDismissReviews() {
       );
     }
 
-    // Step 5: Get relevant teams (only for changed files)
-    const relevantTeams = getRelevantTeams(changedFileOwners);
+    // Step 5: Get teams referenced by CODEOWNERS so repository-wide ownership
+    // can be checked for the unowned-file fallback.
+    const relevantTeams = getRelevantTeams(codeowners);
     console.log(`\n🏢 Checking ${relevantTeams.length} relevant teams...`);
 
     // Step 6: Check team memberships for approved reviewers (only relevant teams)
@@ -192,10 +193,15 @@ async function smartDismissReviews() {
         changedFileOwners,
         teamMemberships.get(reviewer),
       );
+      const isRepositoryCodeowner = isUserCodeowner(
+        reviewer,
+        codeowners,
+        teamMemberships.get(reviewer),
+      );
 
       const isCommitAuthor = commitAuthors.has(reviewer);
       const shouldDismissForUnownedFile =
-        hasUnownedChangedFile && !isCodeowner;
+        hasUnownedChangedFile && !isRepositoryCodeowner;
       let hasStaleApproval = false;
       let staleReason = "";
       let commitsAfterApproval = [];
@@ -563,7 +569,9 @@ function pathMatches(filename, pattern) {
 function getRelevantTeams(fileOwnersMap) {
   const teams = new Set();
 
-  for (const [filename, owners] of fileOwnersMap) {
+  for (const [filename, owners] of fileOwnersMap instanceof Map
+    ? fileOwnersMap
+    : fileOwnersMap.map((entry) => [entry.path, entry.owners])) {
     owners.forEach((owner) => {
       if (owner.startsWith(`${team_start_with}`)) {
         const teamName = owner.replace(`${team_start_with}`, "");
@@ -575,6 +583,23 @@ function getRelevantTeams(fileOwnersMap) {
   }
 
   return Array.from(teams);
+}
+
+function isUserCodeowner(username, codeowners, userTeamMemberships) {
+  return codeowners.some((entry) =>
+    entry.owners.some((owner) => {
+      if (owner === `@${username}`) {
+        return true;
+      }
+
+      if (owner.startsWith(`${team_start_with}`)) {
+        const teamName = owner.replace(`${team_start_with}`, "");
+        return userTeamMemberships?.get(teamName) === true;
+      }
+
+      return false;
+    }),
+  );
 }
 
 function containsUnownedChangedFile(fileOwnersMap) {
@@ -641,4 +666,5 @@ module.exports = {
   getAllReviews,
   getAllCommits,
   containsUnownedChangedFile,
+  isUserCodeowner,
 };
