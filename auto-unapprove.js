@@ -3,7 +3,8 @@
 /**
  * 🚫 Smart Review Dismissal Script
  *
- * Selectively dismisses PR reviews from code owners whose files were modified.
+ * Selectively dismisses PR reviews when codeowners' files were modified or
+ * when a changed file has no codeowners.
  * Optimized for performance with GitHub API v2022-11-28.
  *
  * Usage:
@@ -157,6 +158,12 @@ async function smartDismissReviews() {
         console.log(`   ${file} → No specific owners`);
       }
     }
+    const hasUnownedChangedFile = containsUnownedChangedFile(changedFileOwners);
+    if (hasUnownedChangedFile) {
+      console.log(
+        `⚠️  At least one changed file has no codeowners; non-owner approvals will be dismissed`,
+      );
+    }
 
     // Step 5: Get relevant teams (only for changed files)
     const relevantTeams = getRelevantTeams(changedFileOwners);
@@ -187,6 +194,8 @@ async function smartDismissReviews() {
       );
 
       const isCommitAuthor = commitAuthors.has(reviewer);
+      const shouldDismissForUnownedFile =
+        hasUnownedChangedFile && !isCodeowner;
       let hasStaleApproval = false;
       let staleReason = "";
       let commitsAfterApproval = [];
@@ -262,18 +271,28 @@ async function smartDismissReviews() {
         }
       }
 
-      // Dismissal logic: code owner who authored commits OR has stale approval
-      if (isCodeowner && (isCommitAuthor || hasStaleApproval)) {
+      // Dismiss non-owners when any changed file has no owners. Otherwise,
+      // dismiss code owners who authored commits or have stale approvals.
+      if (
+        shouldDismissForUnownedFile ||
+        (isCodeowner && (isCommitAuthor || hasStaleApproval))
+      ) {
         const reviewIds = reviewerApprovals.map((r) => r.id);
+        let reason;
+        if (shouldDismissForUnownedFile) {
+          reason = "Reviewer is not a codeowner for any changed file";
+        } else if (isCommitAuthor) {
+          reason = "Code owner who authored changes";
+        } else {
+          reason = staleReason;
+        }
 
         dismissalTargets.push({
           reviewer,
           ownedFiles,
           viaTeams,
           reviewIds,
-          reason: isCommitAuthor
-            ? "Code owner who authored changes"
-            : staleReason,
+          reason,
           latestCommit:
             commitsAfterApproval.length > 0
               ? commitsAfterApproval[commitsAfterApproval.length - 1]
@@ -290,7 +309,7 @@ async function smartDismissReviews() {
         );
         console.log(`      🔢 Reviews: ${reviewIds.length}`);
         console.log(
-          `      💡 Reason: ${isCommitAuthor ? "Code owner who authored changes" : staleReason}`,
+          `      💡 Reason: ${reason}`,
         );
       } else {
         console.log(`   ✅ KEEP @${reviewer}`);
@@ -558,6 +577,12 @@ function getRelevantTeams(fileOwnersMap) {
   return Array.from(teams);
 }
 
+function containsUnownedChangedFile(fileOwnersMap) {
+  return Array.from(fileOwnersMap.values()).some(
+    (owners) => owners.length === 0,
+  );
+}
+
 async function checkTeamMembership(username, teamSlug, headers) {
   try {
     const response = await fetch(
@@ -614,5 +639,6 @@ module.exports = {
   smartDismissReviews,
   getAllChangedFiles,
   getAllReviews,
-  getAllCommits
+  getAllCommits,
+  containsUnownedChangedFile,
 };

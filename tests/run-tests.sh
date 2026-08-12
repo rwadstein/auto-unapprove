@@ -15,12 +15,16 @@ echo "   Testing pagination logic with simulated data..."
 node test-pagination.js
 echo ""
 
-echo "2. Running mock API tests..."
+echo "2. Running unowned-file logic tests..."
+node test-unowned-files.js
+echo ""
+
+echo "3. Running mock API tests..."
 echo "   Testing with mock GitHub API responses..."
 node test-mock-pagination.js
 echo ""
 
-echo "3. Checking for real data test setup..."
+echo "4. Checking for real data test setup..."
 echo "   To test with real GitHub data, run:"
 echo "   export GITHUB_TOKEN='your_token'"
 echo "   export GITHUB_REPOSITORY='owner/repo'"
@@ -31,4 +35,4 @@ echo ""
 
 echo "✅ Test suite completed!"
 echo ""
-echo "📖 For detailed testing instructions, see: TESTING.md" 
+echo "📖 For detailed testing instructions, see: TESTING.md"
