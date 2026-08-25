@@ -19,6 +19,10 @@
  *   CODEOWNERS_FILE   - Path to CODEOWNERS file (default: CODEOWNERS)
  *   CHANGED_FILES     - Newline-separated list of files (for webhook optimization)
  *   TARGET_BRANCH     - Target branch (default: main) (for CODEOWNERS file)
+ *
+ * Clean default-branch merge detection requires the repository and its
+ * relevant history to be available locally (for example, checkout with
+ * fetch-depth: 0 in GitHub Actions).
  */
 
 const token = process.env.GITHUB_TOKEN;
@@ -122,6 +126,17 @@ async function smartDismissReviews() {
     console.log(
       `📝 Found ${commits.length} commits from authors: ${Array.from(commitAuthors).join(", ")}`,
     );
+
+    const cleanDefaultBranchMerge = await findCleanDefaultBranchMerge(
+      commits,
+      approvedReviews,
+    );
+    if (cleanDefaultBranchMerge) {
+      console.log(
+        `✅ Clean merge from ${targetBranch} detected after approval; preserving all reviews`,
+      );
+      return;
+    }
 
     if (approvedReviewers.length === 0) {
       console.log("   No approved reviews to analyze");
@@ -499,6 +514,139 @@ async function getAllCommits(headers) {
   return allCommits;
 }
 
+async function findCleanDefaultBranchMerge(commits, approvedReviews) {
+  if (approvedReviews.length === 0) {
+    return false;
+  }
+
+  const earliestApproval = approvedReviews.reduce((earliest, review) => {
+    const approvalTime = new Date(review.submitted_at).getTime();
+    return approvalTime < earliest ? approvalTime : earliest;
+  }, Number.POSITIVE_INFINITY);
+
+  const candidateCommits = commits.filter((commit) => {
+    const commitTime = new Date(commit.commit.committer.date).getTime();
+    return commitTime > earliestApproval && commit.parents?.length > 1;
+  });
+
+  if (candidateCommits.length === 0) {
+    return false;
+  }
+
+  let git;
+  try {
+    git = require("isomorphic-git");
+  } catch (error) {
+    console.log(
+      `⚠️  isomorphic-git unavailable; using regular dismissal behavior`,
+    );
+    return false;
+  }
+
+  const fs = require("fs");
+  const repositoryPath = process.env.GITHUB_WORKSPACE || process.cwd();
+  const gitOptions = { fs, dir: repositoryPath };
+
+  let defaultBranchOid;
+  for (const ref of [
+    `refs/remotes/origin/${targetBranch}`,
+    `refs/heads/${targetBranch}`,
+  ]) {
+    try {
+      defaultBranchOid = await git.resolveRef({ ...gitOptions, ref });
+      break;
+    } catch {
+      // Try the next possible local reference.
+    }
+  }
+
+  if (!defaultBranchOid) {
+    console.log(
+      `⚠️  Default branch ${targetBranch} is not available locally; using regular dismissal behavior`,
+    );
+    return false;
+  }
+
+  for (const commit of candidateCommits) {
+    try {
+      const mergeCommit = await git.readCommit({
+        ...gitOptions,
+        oid: commit.sha,
+      });
+
+      if (mergeCommit.commit.parent.length !== 2) {
+        continue;
+      }
+
+      const [firstParent, secondParent] = mergeCommit.commit.parent;
+      const parentIsDefaultBranch = await findDefaultBranchParent(
+        git,
+        gitOptions,
+        [firstParent, secondParent],
+        defaultBranchOid,
+      );
+
+      if (!parentIsDefaultBranch) {
+        continue;
+      }
+
+      const otherParent =
+        parentIsDefaultBranch === firstParent ? secondParent : firstParent;
+      const mergeResult = await git.merge({
+        ...gitOptions,
+        ours: otherParent,
+        theirs: parentIsDefaultBranch,
+        fastForward: false,
+        author: {
+          name: "Auto Unapprove",
+          email: "auto-unapprove@localhost",
+        },
+        committer: {
+          name: "Auto Unapprove",
+          email: "auto-unapprove@localhost",
+        },
+        noUpdateBranch: true,
+        dryRun: true,
+        abortOnConflict: true,
+      });
+
+      if (mergeResult.tree === mergeCommit.commit.tree) {
+        return true;
+      }
+    } catch (error) {
+      console.log(
+        `⚠️  Could not verify merge ${commit.sha.substring(0, 7)}; using regular dismissal behavior: ${error.message}`,
+      );
+    }
+  }
+
+  return false;
+}
+
+async function findDefaultBranchParent(git, gitOptions, parents, descendant) {
+  const matches = [];
+
+  for (const parent of parents) {
+    try {
+      const isDescendant =
+        descendant === parent ||
+        (await git.isDescendent({
+          ...gitOptions,
+          oid: descendant,
+          ancestor: parent,
+          depth: -1,
+        }));
+      if (isDescendant) {
+        matches.push(parent);
+      }
+    } catch {
+      // Missing objects or unrelated histories are not a match.
+    }
+  }
+
+  return matches.length === 1 ? matches[0] : null;
+}
+
 function parseCodeowners(content) {
   const lines = content.split("\n");
   const owners = [];
@@ -660,11 +808,12 @@ if (require.main === module) {
   smartDismissReviews();
 }
 
-module.exports = { 
+module.exports = {
   smartDismissReviews,
   getAllChangedFiles,
   getAllReviews,
   getAllCommits,
   containsUnownedChangedFile,
   isUserCodeowner,
+  findCleanDefaultBranchMerge,
 };

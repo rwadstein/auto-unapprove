@@ -32,6 +32,11 @@ inputs:
 runs:
   using: "composite"
   steps:
+    - name: Install dependencies
+      shell: bash
+      working-directory: ${{ github.action_path }}
+      run: |
+        npm install
     - name: Run Auto Unapprove
       shell: bash
       run: |

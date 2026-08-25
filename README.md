@@ -217,6 +217,12 @@ _For more workflow examples, see [`example-workflow.yml`](./example-workflow.yml
 | `TARGET_BRANCH` | - | `main` | Target branch to read CODEOWNERS from |
 | `CHANGED_FILES` | - | - | Newline-separated files (webhook optimization) | 
 
+Clean default-branch merge detection uses isomorphic-git to calculate an in-memory
+three-way merge. When running the action, the repository history must be
+available locally; workflows should use `actions/checkout` with
+`fetch-depth: 0`. If the history or merge cannot be verified, the action
+falls back to its regular dismissal behavior.
+
 ## 🧪 **Testing**
 
 The project includes comprehensive tests for the pagination implementation:
