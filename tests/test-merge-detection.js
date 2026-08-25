@@ -64,7 +64,7 @@ function loadDetector(defaultBranch, dir) {
   process.env.GITHUB_WORKSPACE = dir;
   const modulePath = require.resolve("../auto-unapprove.js");
   delete require.cache[modulePath];
-  return require(modulePath).findCleanDefaultBranchMerge;
+  return require(modulePath).findCleanBaseBranchMerge;
 }
 
 async function makeCleanDefaultBranchMerge(defaultBranch = "main") {
@@ -183,6 +183,8 @@ async function run() {
       await detect(
         [await apiCommit(repository.dir, normalCommit)],
         approvalsAt(approvalBefore),
+        "main",
+        repository.base,
       ),
       false,
       "normal commits must not suppress dismissal behavior",
@@ -194,7 +196,12 @@ async function run() {
     const repository = await makeCleanDefaultBranchMerge();
     const detect = loadDetector("main", repository.dir);
     assert.strictEqual(
-      await detect([repository.mergeCommit], approvalsAt(approvalBefore)),
+      await detect(
+        [repository.mergeCommit],
+        approvalsAt(approvalBefore),
+        "main",
+        repository.defaultTip,
+      ),
       true,
     );
   }
@@ -204,7 +211,12 @@ async function run() {
     const repository = await makeConflictResolutionMerge();
     const detect = loadDetector("main", repository.dir);
     assert.strictEqual(
-      await detect([repository.mergeCommit], approvalsAt(approvalBefore)),
+      await detect(
+        [repository.mergeCommit],
+        approvalsAt(approvalBefore),
+        "main",
+        repository.defaultTip,
+      ),
       false,
       "manual conflict resolutions must not suppress dismissal behavior",
     );
@@ -215,7 +227,12 @@ async function run() {
     const repository = await makeFeatureBranchMerge();
     const detect = loadDetector("main", repository.dir);
     assert.strictEqual(
-      await detect([repository.mergeCommit], approvalsAt(approvalBefore)),
+      await detect(
+        [repository.mergeCommit],
+        approvalsAt(approvalBefore),
+        "main",
+        repository.defaultTip,
+      ),
       false,
       "feature-branch merges must not suppress dismissal behavior",
     );
@@ -226,7 +243,12 @@ async function run() {
     const repository = await makeCleanDefaultBranchMerge("develop");
     const detect = loadDetector("develop", repository.dir);
     assert.strictEqual(
-      await detect([repository.mergeCommit], approvalsAt(approvalBefore)),
+      await detect(
+        [repository.mergeCommit],
+        approvalsAt(approvalBefore),
+        "develop",
+        repository.defaultTip,
+      ),
       true,
     );
   }
@@ -236,7 +258,12 @@ async function run() {
     const repository = await makeCleanDefaultBranchMerge();
     const detect = loadDetector("main", repository.dir);
     assert.strictEqual(
-      await detect([repository.mergeCommit], approvalsAt(approvalAfter)),
+      await detect(
+        [repository.mergeCommit],
+        approvalsAt(approvalAfter),
+        "main",
+        repository.defaultTip,
+      ),
       false,
       "pre-approval merges must not suppress dismissal behavior",
     );

@@ -92,17 +92,33 @@ async function smartDismissReviews() {
       console.log(`   📝 ${file}`);
     });
 
-    // Step 2: Get PR reviews, CODEOWNERS, and commit authors in parallel
+    // Step 2: Get the PR base branch and SHA.
     console.log(`\n👥 Fetching PR reviews, CODEOWNERS, and commit authors...`);
 
-    console.log(`🎯 Target branch: ${targetBranch}`);
+    const pullRequestResponse = await fetch(
+      `https://api.github.com/repos/${owner}/${repo}/pulls/${prNumber}`,
+      { headers },
+    );
+    if (!pullRequestResponse.ok) {
+      throw new Error(
+        `Failed to fetch pull request metadata: ${pullRequestResponse.status}`,
+      );
+    }
+    const pullRequestData = await pullRequestResponse.json();
+    const baseBranch = pullRequestData.base?.ref || targetBranch;
+    const baseSha = pullRequestData.base?.sha;
 
-    const [codeownersResponse] = await Promise.all([
-      fetch(
-        `https://api.github.com/repos/${owner}/${repo}/contents/${codeownersFile}?ref=${targetBranch}`,
-        { headers },
-      ),
-    ]);
+    if (!baseSha) {
+      throw new Error("Pull request base SHA is unavailable");
+    }
+
+    console.log(`🎯 PR base branch: ${baseBranch}`);
+    console.log(`🎯 PR base SHA: ${baseSha}`);
+
+    const codeownersResponse = await fetch(
+      `https://api.github.com/repos/${owner}/${repo}/contents/${codeownersFile}?ref=${baseBranch}`,
+      { headers },
+    );
 
     // Get all reviews and commits with pagination
     console.log(`📋 Fetching all reviews and commits...`);
@@ -127,13 +143,15 @@ async function smartDismissReviews() {
       `📝 Found ${commits.length} commits from authors: ${Array.from(commitAuthors).join(", ")}`,
     );
 
-    const cleanDefaultBranchMerge = await findCleanDefaultBranchMerge(
+    const cleanBaseBranchMerge = await findCleanBaseBranchMerge(
       commits,
       approvedReviews,
+      baseBranch,
+      baseSha,
     );
-    if (cleanDefaultBranchMerge) {
+    if (cleanBaseBranchMerge) {
       console.log(
-        `✅ Clean merge from ${targetBranch} detected after approval; preserving all reviews`,
+        `✅ Clean merge from PR base branch ${baseBranch} detected after approval; preserving all reviews`,
       );
       return;
     }
@@ -514,7 +532,12 @@ async function getAllCommits(headers) {
   return allCommits;
 }
 
-async function findCleanDefaultBranchMerge(commits, approvedReviews) {
+async function findCleanBaseBranchMerge(
+  commits,
+  approvedReviews,
+  baseBranch,
+  baseSha,
+) {
   if (approvedReviews.length === 0) {
     return false;
   }
@@ -547,22 +570,9 @@ async function findCleanDefaultBranchMerge(commits, approvedReviews) {
   const repositoryPath = process.env.GITHUB_WORKSPACE || process.cwd();
   const gitOptions = { fs, dir: repositoryPath };
 
-  let defaultBranchOid;
-  for (const ref of [
-    `refs/remotes/origin/${targetBranch}`,
-    `refs/heads/${targetBranch}`,
-  ]) {
-    try {
-      defaultBranchOid = await git.resolveRef({ ...gitOptions, ref });
-      break;
-    } catch {
-      // Try the next possible local reference.
-    }
-  }
-
-  if (!defaultBranchOid) {
+  if (!baseBranch || !baseSha) {
     console.log(
-      `⚠️  Default branch ${targetBranch} is not available locally; using regular dismissal behavior`,
+      `⚠️  PR base branch or SHA is unavailable; using regular dismissal behavior`,
     );
     return false;
   }
@@ -583,7 +593,7 @@ async function findCleanDefaultBranchMerge(commits, approvedReviews) {
         git,
         gitOptions,
         [firstParent, secondParent],
-        defaultBranchOid,
+        baseSha,
       );
 
       if (!parentIsDefaultBranch) {
@@ -821,5 +831,5 @@ module.exports = {
   getAllCommits,
   containsUnownedChangedFile,
   isUserCodeowner,
-  findCleanDefaultBranchMerge,
+  findCleanBaseBranchMerge,
 };
