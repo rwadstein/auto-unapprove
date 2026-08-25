@@ -642,6 +642,17 @@ async function findCleanBaseBranchMerge(
 
     return mergeResult.tree === mergeCommit.commit.tree;
   } catch (error) {
+    if (
+      error.code === "MergeConflictError" ||
+      error.code === "MergeNotSupportedError" ||
+      error.message.includes("Automatic merge failed with one or more merge conflicts")
+    ) {
+      console.log(
+        `⚠️  Merge ${headSha} required conflict resolution; using regular dismissal behavior`,
+      );
+      return false;
+    }
+
     console.log(
       `⚠️  Could not verify merge ${headSha.substring(0, 7)}; using regular dismissal behavior: ${error.message}`,
     );
