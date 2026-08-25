@@ -107,6 +107,7 @@ async function smartDismissReviews() {
     const pullRequestData = await pullRequestResponse.json();
     const baseBranch = pullRequestData.base?.ref || targetBranch;
     const baseSha = pullRequestData.base?.sha;
+    const headSha = pullRequestData.head?.sha;
 
     if (!baseSha) {
       throw new Error("Pull request base SHA is unavailable");
@@ -114,6 +115,7 @@ async function smartDismissReviews() {
 
     console.log(`🎯 PR base branch: ${baseBranch}`);
     console.log(`🎯 PR base SHA: ${baseSha}`);
+    console.log(`🎯 PR head SHA: ${headSha}`);
 
     const codeownersResponse = await fetch(
       `https://api.github.com/repos/${owner}/${repo}/contents/${codeownersFile}?ref=${baseBranch}`,
@@ -148,6 +150,7 @@ async function smartDismissReviews() {
       approvedReviews,
       baseBranch,
       baseSha,
+      headSha,
     );
     if (cleanBaseBranchMerge) {
       console.log(
@@ -537,6 +540,7 @@ async function findCleanBaseBranchMerge(
   approvedReviews,
   baseBranch,
   baseSha,
+  headSha,
 ) {
   if (approvedReviews.length === 0) {
     return false;
@@ -547,12 +551,27 @@ async function findCleanBaseBranchMerge(
     return approvalTime < earliest ? approvalTime : earliest;
   }, Number.POSITIVE_INFINITY);
 
-  const candidateCommits = commits.filter((commit) => {
-    const commitTime = new Date(commit.commit.committer.date).getTime();
-    return commitTime > earliestApproval && commit.parents?.length > 1;
-  });
+  const headCommit = commits.find((commit) => commit.sha === headSha);
+  if (!headCommit) {
+    return false;
+  }
 
-  if (candidateCommits.length === 0) {
+  const headCommitTime = new Date(
+    headCommit.commit.committer.date,
+  ).getTime();
+  const headParentCount = headCommit.parents?.length || 0;
+  if (
+    !Number.isFinite(headCommitTime) ||
+    headCommitTime <= earliestApproval ||
+    headParentCount < 2
+  ) {
+    return false;
+  }
+
+  if (headParentCount > 2) {
+    console.log(
+      `⚠️  Octopus merge detected in PR head ${headSha}; using regular dismissal behavior`,
+    );
     return false;
   }
 
@@ -577,66 +596,57 @@ async function findCleanBaseBranchMerge(
     return false;
   }
 
-  for (const commit of candidateCommits) {
-    try {
-      const mergeCommit = await git.readCommit({
-        ...gitOptions,
-        oid: commit.sha,
-      });
+  try {
+    const mergeCommit = await git.readCommit({
+      ...gitOptions,
+      oid: headSha,
+    });
 
-      if (mergeCommit.commit.parent.length !== 2) {
-        continue;
-      }
+    const [firstParent, secondParent] = mergeCommit.commit.parent;
+    const parentIsDefaultBranch = await findDefaultBranchParent(
+      git,
+      gitOptions,
+      [firstParent, secondParent],
+      baseSha,
+    );
 
-      const [firstParent, secondParent] = mergeCommit.commit.parent;
-      const parentIsDefaultBranch = await findDefaultBranchParent(
-        git,
-        gitOptions,
-        [firstParent, secondParent],
-        baseSha,
-      );
-
-      if (!parentIsDefaultBranch) {
-        continue;
-      }
-
-      const otherParent =
-        parentIsDefaultBranch === firstParent ? secondParent : firstParent;
-      const mergeResult = await git.merge({
-        ...gitOptions,
-        ours: otherParent,
-        theirs: parentIsDefaultBranch,
-        fastForward: false,
-        author: {
-          name: "Auto Unapprove",
-          email: "auto-unapprove@localhost",
-        },
-        committer: {
-          name: "Auto Unapprove",
-          email: "auto-unapprove@localhost",
-        },
-        noUpdateBranch: true,
-        dryRun: true,
-        abortOnConflict: true,
-      });
-
-      console.log(`🔀 Dry-run merge result for ${commit.sha}:`);
-      console.log(`   Ours: ${otherParent}`);
-      console.log(`   Theirs: ${parentIsDefaultBranch}`);
-      console.log(`   Actual merge tree: ${mergeCommit.commit.tree}`);
-      console.log(`   Result: ${JSON.stringify(mergeResult)}`);
-
-      if (mergeResult.tree === mergeCommit.commit.tree) {
-        return true;
-      }
-    } catch (error) {
-      console.log(
-        `⚠️  Could not verify merge ${commit.sha.substring(0, 7)}; using regular dismissal behavior: ${error.message}`,
-      );
+    if (!parentIsDefaultBranch) {
+      return false;
     }
-  }
 
-  return false;
+    const otherParent =
+      parentIsDefaultBranch === firstParent ? secondParent : firstParent;
+    const mergeResult = await git.merge({
+      ...gitOptions,
+      ours: otherParent,
+      theirs: parentIsDefaultBranch,
+      fastForward: false,
+      author: {
+        name: "Auto Unapprove",
+        email: "auto-unapprove@localhost",
+      },
+      committer: {
+        name: "Auto Unapprove",
+        email: "auto-unapprove@localhost",
+      },
+      noUpdateBranch: true,
+      dryRun: true,
+      abortOnConflict: true,
+    });
+
+    console.log(`🔀 Dry-run merge result for ${headSha}:`);
+    console.log(`   Ours: ${otherParent}`);
+    console.log(`   Theirs: ${parentIsDefaultBranch}`);
+    console.log(`   Actual merge tree: ${mergeCommit.commit.tree}`);
+    console.log(`   Result: ${JSON.stringify(mergeResult)}`);
+
+    return mergeResult.tree === mergeCommit.commit.tree;
+  } catch (error) {
+    console.log(
+      `⚠️  Could not verify merge ${headSha.substring(0, 7)}; using regular dismissal behavior: ${error.message}`,
+    );
+    return false;
+  }
 }
 
 async function findDefaultBranchParent(git, gitOptions, parents, descendant) {

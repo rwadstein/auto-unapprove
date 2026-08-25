@@ -16,6 +16,13 @@ function gitOptions(dir) {
 }
 
 async function commit(dir, message) {
+  const status = await git.statusMatrix({ ...gitOptions(dir) });
+  for (const [filepath, headStatus, workdirStatus] of status) {
+    if (headStatus !== workdirStatus) {
+      await git.add({ ...gitOptions(dir), filepath });
+    }
+  }
+
   return git.commit({
     ...gitOptions(dir),
     message,
@@ -106,31 +113,79 @@ async function makeConflictResolutionMerge() {
 
   await git.branch({ ...gitOptions(dir), ref: "feature" });
   await checkout(dir, "feature");
-  fs.writeFileSync(path.join(dir, "file.txt"), "feature\n");
-  const featureTip = await commit(dir, "feature change");
+  fs.writeFileSync(path.join(dir, "feature.txt"), "feature\n");
+  await commit(dir, "feature change");
 
   await checkout(dir, "main");
-  fs.writeFileSync(path.join(dir, "file.txt"), "main\n");
-  const defaultTip = await commit(dir, "default branch change");
+  fs.writeFileSync(path.join(dir, "default.txt"), "default\n");
+  await commit(dir, "default branch change");
 
   await checkout(dir, "feature");
-  await git.merge({
+  const cleanMerge = await git.merge({
     ...gitOptions(dir),
     ours: "feature",
     theirs: "main",
     fastForward: false,
     author: identity,
     committer: identity,
-    abortOnConflict: false,
+    message: "Clean default branch merge",
   });
-  fs.writeFileSync(path.join(dir, "file.txt"), "manual resolution\n");
-  await git.add({ ...gitOptions(dir), filepath: "file.txt" });
-  const mergeOid = await commit(dir, "Resolve merge conflict");
+
+  await checkout(dir, "main");
+  fs.writeFileSync(path.join(dir, "file.txt"), "main conflict\n");
+  const defaultTip = await commit(dir, "default branch conflict change");
+
+  await checkout(dir, "feature");
+  fs.writeFileSync(path.join(dir, "file.txt"), "feature conflict\n");
+  const featureTip = await commit(dir, "feature conflict change");
+  const featureCommit = await git.readCommit({
+    ...gitOptions(dir),
+    oid: featureTip,
+  });
+  const { tree: featureTree } = await git.readTree({
+    ...gitOptions(dir),
+    oid: featureCommit.commit.tree,
+  });
+  const resolvedBlob = await git.writeBlob({
+    ...gitOptions(dir),
+    blob: new Uint8Array(Buffer.from("manual resolution\n")),
+  });
+  const resolvedTree = featureTree.map((entry) =>
+    entry.path === "file.txt" ? { ...entry, oid: resolvedBlob } : entry,
+  );
+  const resolvedTreeOid = await git.writeTree({
+    ...gitOptions(dir),
+    tree: resolvedTree,
+  });
+  const mergeOid = await git.writeCommit({
+    ...gitOptions(dir),
+    commit: {
+      tree: resolvedTreeOid,
+      parent: [featureTip, defaultTip],
+      message: "Resolve merge conflict",
+      author: {
+        ...identity,
+        timestamp: Math.floor(Date.now() / 1000),
+        timezoneOffset: new Date().getTimezoneOffset(),
+      },
+      committer: {
+        ...identity,
+        timestamp: Math.floor(Date.now() / 1000),
+        timezoneOffset: new Date().getTimezoneOffset(),
+      },
+    },
+  });
+  await git.writeRef({
+    ...gitOptions(dir),
+    ref: "refs/heads/feature",
+    value: mergeOid,
+    force: true,
+  });
 
   return {
     ...repository,
-    featureTip,
     defaultTip,
+    cleanMergeCommit: await apiCommit(dir, cleanMerge.oid),
     mergeCommit: await apiCommit(dir, mergeOid),
   };
 }
@@ -149,6 +204,10 @@ async function makeFeatureBranchMerge() {
   await checkout(dir, "main");
   fs.writeFileSync(path.join(dir, "main.txt"), "main\n");
   await commit(dir, "default branch change");
+  const defaultTip = await git.resolveRef({
+    ...gitOptions(dir),
+    ref: "main",
+  });
 
   await checkout(dir, "feature-one");
   fs.writeFileSync(path.join(dir, "feature-one.txt"), "feature one\n");
@@ -165,6 +224,7 @@ async function makeFeatureBranchMerge() {
 
   return {
     ...repository,
+    defaultTip,
     mergeCommit: await apiCommit(dir, merge.oid),
   };
 }
@@ -185,6 +245,7 @@ async function run() {
         approvalsAt(approvalBefore),
         "main",
         repository.base,
+        normalCommit,
       ),
       false,
       "normal commits must not suppress dismissal behavior",
@@ -201,6 +262,7 @@ async function run() {
         approvalsAt(approvalBefore),
         "main",
         repository.defaultTip,
+        repository.mergeCommit.sha,
       ),
       true,
     );
@@ -212,10 +274,28 @@ async function run() {
     const detect = loadDetector("main", repository.dir);
     assert.strictEqual(
       await detect(
-        [repository.mergeCommit],
+        [
+          {
+            ...repository.cleanMergeCommit,
+            commit: {
+              committer: {
+                date: new Date(Date.now() - 20_000).toISOString(),
+              },
+            },
+          },
+          {
+            ...repository.mergeCommit,
+            commit: {
+              committer: {
+                date: new Date(Date.now() - 10_000).toISOString(),
+              },
+            },
+          },
+        ],
         approvalsAt(approvalBefore),
         "main",
         repository.defaultTip,
+        repository.mergeCommit.sha,
       ),
       false,
       "manual conflict resolutions must not suppress dismissal behavior",
@@ -232,6 +312,7 @@ async function run() {
         approvalsAt(approvalBefore),
         "main",
         repository.defaultTip,
+        repository.mergeCommit.sha,
       ),
       false,
       "feature-branch merges must not suppress dismissal behavior",
@@ -248,6 +329,7 @@ async function run() {
         approvalsAt(approvalBefore),
         "develop",
         repository.defaultTip,
+        repository.mergeCommit.sha,
       ),
       true,
     );
@@ -263,6 +345,7 @@ async function run() {
         approvalsAt(approvalAfter),
         "main",
         repository.defaultTip,
+        repository.mergeCommit.sha,
       ),
       false,
       "pre-approval merges must not suppress dismissal behavior",
