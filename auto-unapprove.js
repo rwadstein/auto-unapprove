@@ -610,6 +610,12 @@ async function findCleanDefaultBranchMerge(commits, approvedReviews) {
         abortOnConflict: true,
       });
 
+      console.log(`🔀 Dry-run merge result for ${commit.sha}:`);
+      console.log(`   Ours: ${otherParent}`);
+      console.log(`   Theirs: ${parentIsDefaultBranch}`);
+      console.log(`   Actual merge tree: ${mergeCommit.commit.tree}`);
+      console.log(`   Result: ${JSON.stringify(mergeResult)}`);
+
       if (mergeResult.tree === mergeCommit.commit.tree) {
         return true;
       }
