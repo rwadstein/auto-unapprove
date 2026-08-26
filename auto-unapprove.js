@@ -92,30 +92,22 @@ async function smartDismissReviews() {
       console.log(`   📝 ${file}`);
     });
 
-    // Step 2: Get the PR base branch and SHA.
+    // Step 2: Get the PR base and head from the GitHub Actions event context.
     console.log(`\n👥 Fetching PR reviews, CODEOWNERS, and commit authors...`);
 
-    const pullRequestResponse = await fetch(
-      `https://api.github.com/repos/${owner}/${repo}/pulls/${prNumber}`,
-      { headers },
-    );
-    if (!pullRequestResponse.ok) {
-      throw new Error(
-        `Failed to fetch pull request metadata: ${pullRequestResponse.status}`,
-      );
-    }
-    const pullRequestData = await pullRequestResponse.json();
-    const baseBranch = pullRequestData.base?.ref || targetBranch;
-    const baseSha = pullRequestData.base?.sha;
-    const headSha = pullRequestData.head?.sha;
+    const baseBranch = process.env.PR_BASE_BRANCH || targetBranch;
+    const baseSha = process.env.PR_BASE_SHA;
+    const commitSha = process.env.PR_AFTER_SHA || process.env.PR_HEAD_SHA;
 
-    if (!baseSha) {
-      throw new Error("Pull request base SHA is unavailable");
+    if (!baseSha || !commitSha) {
+      throw new Error(
+        "PR_BASE_SHA and PR_AFTER_SHA or PR_HEAD_SHA are required when running as a GitHub Action",
+      );
     }
 
     console.log(`🎯 PR base branch: ${baseBranch}`);
     console.log(`🎯 PR base SHA: ${baseSha}`);
-    console.log(`🎯 PR head SHA: ${headSha}`);
+    console.log(`🎯 PR commit SHA: ${commitSha}`);
 
     const codeownersResponse = await fetch(
       `https://api.github.com/repos/${owner}/${repo}/contents/${codeownersFile}?ref=${baseBranch}`,
@@ -145,22 +137,21 @@ async function smartDismissReviews() {
       `📝 Found ${commits.length} commits from authors: ${Array.from(commitAuthors).join(", ")}`,
     );
 
+    if (approvedReviewers.length === 0) {
+      console.log("   No approved reviews to analyze");
+      return;
+    }
+
     const cleanBaseBranchMerge = await findCleanBaseBranchMerge(
       commits,
-      approvedReviews,
       baseBranch,
       baseSha,
-      headSha,
+      commitSha,
     );
     if (cleanBaseBranchMerge) {
       console.log(
         `✅ Clean merge from PR base branch ${baseBranch} detected after approval; preserving all reviews`,
       );
-      return;
-    }
-
-    if (approvedReviewers.length === 0) {
-      console.log("   No approved reviews to analyze");
       return;
     }
 
@@ -537,40 +528,28 @@ async function getAllCommits(headers) {
 
 async function findCleanBaseBranchMerge(
   commits,
-  approvedReviews,
   baseBranch,
   baseSha,
-  headSha,
+  commitSha,
 ) {
-  if (approvedReviews.length === 0) {
-    return false;
-  }
-
-  const earliestApproval = approvedReviews.reduce((earliest, review) => {
-    const approvalTime = new Date(review.submitted_at).getTime();
-    return approvalTime < earliest ? approvalTime : earliest;
-  }, Number.POSITIVE_INFINITY);
-
-  const headCommit = commits.find((commit) => commit.sha === headSha);
+  const headCommit = commits.find((commit) => commit.sha === commitSha);
   if (!headCommit) {
+    console.log(
+      `⚠️  Commit ${commitSha} could not be located. Ensure the repository is checked out with full history; using regular dismissal behavior`,
+    );
     return false;
   }
 
-  const headCommitTime = new Date(
-    headCommit.commit.committer.date,
-  ).getTime();
   const headParentCount = headCommit.parents?.length || 0;
-  if (
-    !Number.isFinite(headCommitTime) ||
-    headCommitTime <= earliestApproval ||
-    headParentCount < 2
-  ) {
+
+  // A commit with fewer than 2 parents is not a merge commit
+  if (headParentCount < 2) {
     return false;
   }
 
   if (headParentCount > 2) {
     console.log(
-      `⚠️  Octopus merge detected in PR head ${headSha}; using regular dismissal behavior`,
+      `⚠️  Octopus merge detected in PR commit ${commitSha}; using regular dismissal behavior`,
     );
     return false;
   }
@@ -599,7 +578,7 @@ async function findCleanBaseBranchMerge(
   try {
     const mergeCommit = await git.readCommit({
       ...gitOptions,
-      oid: headSha,
+      oid: commitSha,
     });
 
     const [firstParent, secondParent] = mergeCommit.commit.parent;
@@ -634,7 +613,7 @@ async function findCleanBaseBranchMerge(
       abortOnConflict: true,
     });
 
-    console.log(`🔀 Dry-run merge result for ${headSha}:`);
+    console.log(`🔀 Dry-run merge result for ${commitSha}:`);
     console.log(`   Ours: ${otherParent}`);
     console.log(`   Theirs: ${parentIsDefaultBranch}`);
     console.log(`   Actual merge tree: ${mergeCommit.commit.tree}`);
@@ -648,13 +627,13 @@ async function findCleanBaseBranchMerge(
       error.message.includes("Automatic merge failed with one or more merge conflicts")
     ) {
       console.log(
-        `⚠️  Merge ${headSha} required conflict resolution; using regular dismissal behavior`,
+        `⚠️  Merge ${commitSha} required conflict resolution; using regular dismissal behavior`,
       );
       return false;
     }
 
     console.log(
-      `⚠️  Could not verify merge ${headSha.substring(0, 7)}; using regular dismissal behavior: ${error.message}`,
+      `⚠️  Could not verify merge ${commitSha.substring(0, 7)}; using regular dismissal behavior: ${error.message}`,
     );
     return false;
   }

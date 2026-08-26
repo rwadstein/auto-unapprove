@@ -47,4 +47,8 @@ runs:
         export TARGET_BRANCH="${{ inputs.target-branch }}"
         export GITHUB_REPOSITORY="${{ github.repository }}"
         export TEAM_START_WITH="${{ inputs.team-start-with }}"
+        export PR_BASE_BRANCH="${{ github.event.pull_request.base.ref }}"
+        export PR_BASE_SHA="${{ github.event.pull_request.base.sha }}"
+        export PR_HEAD_SHA="${{ github.event.pull_request.head.sha }}"
+        export PR_AFTER_SHA="${{ github.event.after }}"
         node ${{ github.action_path }}/auto-unapprove.js

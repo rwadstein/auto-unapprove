@@ -56,16 +56,6 @@ async function apiCommit(dir, oid) {
   };
 }
 
-function approvalsAt(date) {
-  return [
-    {
-      state: "APPROVED",
-      submitted_at: date,
-      user: { login: "reviewer" },
-    },
-  ];
-}
-
 function loadDetector(defaultBranch, dir) {
   process.env.TARGET_BRANCH = defaultBranch;
   process.env.GITHUB_WORKSPACE = dir;
@@ -230,10 +220,7 @@ async function makeFeatureBranchMerge() {
 }
 
 async function run() {
-  const approvalBefore = new Date(Date.now() - 60_000).toISOString();
-  const approvalAfter = new Date(Date.now() + 60_000).toISOString();
-
-  // A normal commit after approval remains on the existing dismissal path.
+  // A normal commit remains on the existing dismissal path.
   {
     const repository = await createRepository();
     fs.writeFileSync(path.join(repository.dir, "normal.txt"), "normal\n");
@@ -242,7 +229,6 @@ async function run() {
     assert.strictEqual(
       await detect(
         [await apiCommit(repository.dir, normalCommit)],
-        approvalsAt(approvalBefore),
         "main",
         repository.base,
         normalCommit,
@@ -259,7 +245,6 @@ async function run() {
     assert.strictEqual(
       await detect(
         [repository.mergeCommit],
-        approvalsAt(approvalBefore),
         "main",
         repository.defaultTip,
         repository.mergeCommit.sha,
@@ -292,7 +277,6 @@ async function run() {
             },
           },
         ],
-        approvalsAt(approvalBefore),
         "main",
         repository.defaultTip,
         repository.mergeCommit.sha,
@@ -309,7 +293,6 @@ async function run() {
     assert.strictEqual(
       await detect(
         [repository.mergeCommit],
-        approvalsAt(approvalBefore),
         "main",
         repository.defaultTip,
         repository.mergeCommit.sha,
@@ -326,29 +309,11 @@ async function run() {
     assert.strictEqual(
       await detect(
         [repository.mergeCommit],
-        approvalsAt(approvalBefore),
         "develop",
         repository.defaultTip,
         repository.mergeCommit.sha,
       ),
       true,
-    );
-  }
-
-  // A default-branch merge before approval must not suppress later dismissal.
-  {
-    const repository = await makeCleanDefaultBranchMerge();
-    const detect = loadDetector("main", repository.dir);
-    assert.strictEqual(
-      await detect(
-        [repository.mergeCommit],
-        approvalsAt(approvalAfter),
-        "main",
-        repository.defaultTip,
-        repository.mergeCommit.sha,
-      ),
-      false,
-      "pre-approval merges must not suppress dismissal behavior",
     );
   }
 

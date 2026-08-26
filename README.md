@@ -216,6 +216,10 @@ _For more workflow examples, see [`example-workflow.yml`](./example-workflow.yml
 | `CODEOWNERS_FILE` | - | `CODEOWNERS` | Path to CODEOWNERS file |
 | `TARGET_BRANCH` | - | `main` | Target branch to read CODEOWNERS from |
 | `CHANGED_FILES` | - | - | Newline-separated files (webhook optimization) | 
+| `PR_BASE_BRANCH` | - | - | Pull request base branch from the GitHub Actions event |
+| `PR_BASE_SHA` | - | - | Pull request base SHA from the GitHub Actions event |
+| `PR_HEAD_SHA` | - | - | Pull request head SHA fallback from the GitHub Actions event |
+| `PR_AFTER_SHA` | - | - | Event `after` SHA used first for the current event commit |
 
 Clean PR-base merge detection uses isomorphic-git to calculate an in-memory
 three-way merge. When running the action, the repository history must be
