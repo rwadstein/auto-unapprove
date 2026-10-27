@@ -186,9 +186,12 @@ async function smartDismissReviews() {
       }
     }
     const hasUnownedChangedFile = containsUnownedChangedFile(changedFileOwners);
+    const nonCodeownedFiles = [...changedFileOwners.entries()]
+      .filter(([, owners]) => owners.length === 0)
+      .map(([file]) => file);
     if (hasUnownedChangedFile) {
       console.log(
-        `⚠️  At least one changed file has no codeowners; non-owner approvals will be dismissed`,
+        `⚠️  At least one changed file has no codeowners; non-owner approvals will be checked against those files`,
       );
     }
 
@@ -227,20 +230,23 @@ async function smartDismissReviews() {
       );
 
       const isCommitAuthor = commitAuthors.has(reviewer);
-      const shouldDismissForUnownedFile =
-        hasUnownedChangedFile && !isRepositoryCodeowner;
       let hasStaleApproval = false;
       let staleReason = "";
       let commitsAfterApproval = [];
-      let affectedOwnedFiles = [];
+      let affectedFiles = [];
 
       // Get reviewer's approvals with timestamps
       const reviewerApprovals = approvedReviews.filter(
         (r) => r.user.login === reviewer,
       );
 
-      if (isCodeowner && reviewerApprovals.length > 0) {
-        // Check for commits after approval to owned files
+      const filesToCheck = isCodeowner ? ownedFiles : nonCodeownedFiles;
+      const shouldCheckApprovalTimestamp =
+        reviewerApprovals.length > 0 &&
+        (isCodeowner || (hasUnownedChangedFile && !isRepositoryCodeowner));
+
+      if (shouldCheckApprovalTimestamp) {
+        // Check for commits after approval to the files relevant to this reviewer.
         const latestApproval = reviewerApprovals.sort(
           (a, b) => new Date(b.submitted_at) - new Date(a.submitted_at),
         )[0];
@@ -257,8 +263,8 @@ async function smartDismissReviews() {
             `   🕐 Checking commits after ${reviewer}'s approval (${approvalTime.toISOString()})...`,
           );
 
-          // Check if post-approval commits actually touched owned files
-          affectedOwnedFiles = [];
+          // Check if post-approval commits actually touched relevant files.
+          affectedFiles = [];
 
           for (const commit of commitsAfterApproval) {
             console.log(
@@ -275,14 +281,14 @@ async function smartDismissReviews() {
                 const commitDetails = await commitDetailsResponse.json();
                 const commitFiles = commitDetails.files.map((f) => f.filename);
 
-                // Check if any commit files are owned by this reviewer
+                // Check if any commit files are relevant to this reviewer.
                 const intersection = commitFiles.filter((file) =>
-                  ownedFiles.includes(file),
+                  filesToCheck.includes(file),
                 );
                 if (intersection.length > 0) {
-                  affectedOwnedFiles.push(...intersection);
+                  affectedFiles.push(...intersection);
                   console.log(
-                    `       🎯 Modified owned files: ${intersection.join(", ")}`,
+                    `       🎯 Modified relevant files: ${intersection.join(", ")}`,
                   );
                 }
               }
@@ -293,19 +299,22 @@ async function smartDismissReviews() {
             }
           }
 
-          if (affectedOwnedFiles.length > 0) {
+          if (affectedFiles.length > 0) {
             hasStaleApproval = true;
-            staleReason = `Approval became stale - commits modified owned files: ${[...new Set(affectedOwnedFiles)].join(", ")}`;
+            staleReason = `Approval became stale - commits modified relevant files: ${[...new Set(affectedFiles)].join(", ")}`;
           } else {
             console.log(
-              `     ✅ No owned files modified - approval stays valid`,
+              `     ✅ No relevant files modified - approval stays valid`,
             );
           }
         }
       }
 
-      // Dismiss non-owners when any changed file has no owners. Otherwise,
-      // dismiss code owners who authored commits or have stale approvals.
+      // Dismiss non-owners only when a post-approval commit modified an
+      // unowned changed file. Otherwise, dismiss code owners who authored
+      // commits or have stale approvals.
+      const shouldDismissForUnownedFile =
+        hasUnownedChangedFile && !isRepositoryCodeowner && hasStaleApproval;
       if (
         shouldDismissForUnownedFile ||
         (isCodeowner && (isCommitAuthor || hasStaleApproval))
@@ -313,7 +322,7 @@ async function smartDismissReviews() {
         const reviewIds = reviewerApprovals.map((r) => r.id);
         let reason;
         if (shouldDismissForUnownedFile) {
-          reason = "Reviewer is not a codeowner for any changed file";
+          reason = staleReason;
         } else if (isCommitAuthor) {
           reason = "Code owner who authored changes";
         } else {
@@ -331,7 +340,7 @@ async function smartDismissReviews() {
               ? commitsAfterApproval[commitsAfterApproval.length - 1]
               : null,
           affectedFilesCount: hasStaleApproval
-            ? [...new Set(affectedOwnedFiles)].length
+            ? [...new Set(affectedFiles)].length
             : 0,
         });
         console.log(`   `);

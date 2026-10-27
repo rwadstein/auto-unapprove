@@ -98,7 +98,8 @@ node auto-unapprove.js
 5. **Smart dismissal logic**:
    - Dismiss code owners who authored commits
    - Dismiss stale approvals (post-approval commits to owned files)
-   - Preserve legitimate approvals from non-owners
+   - Dismiss non-codeowner approvals only when post-approval commits modify changed files with no codeowners
+   - Preserve non-codeowner approvals when those files were not modified after approval
 
 ## 📝 **Example Workflow**
 
